@@ -6,8 +6,10 @@ load_dotenv()
 #-------------------------------------
 #모델 설정
 #-------------------------------------
-from langchain_anthropic import ChatAnthropic
-llm = ChatAnthropic(model="claude-sonnet-4-5-20250929")
+# from langchain_anthropic import ChatAnthropic
+# llm = ChatAnthropic(model="claude-sonnet-4-5-20250929")
+from langchain_openai import ChatOpenAI
+llm = ChatOpenAI(model="gpt-4.1")
 
 from typing_extensions import TypedDict
 from langgraph.graph import StateGraph, START, END
@@ -22,7 +24,7 @@ from pydantic import BaseModel, Field
 # LLM이 반드시 step에 "poem"/"story"/"joke" 중 하나를 내게 강제.
 class Route(BaseModel):
     step: Literal["poem", "story", "joke"] = Field(
-        None, description="유저의 입력에 대해 poem/story/joke 중 하나를 선택하여라"
+        None, description="유저의 입력에 대해 poem/stroy/joke 중 하나를 선택하여라"
     )
 
 
@@ -67,7 +69,7 @@ def llm_call_router(state: State):
     decision = router.invoke(
         [
             SystemMessage(
-                content="유저의 입력에 대해 poem/story/joke 중 하나를 선택하여라"
+                content="유저의 입력에 대해 poem/stroy/joke 중 하나를 선택하여라"
             ),
             HumanMessage(content=state["input"]),
         ]

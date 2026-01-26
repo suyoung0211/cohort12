@@ -15,14 +15,14 @@ from langgraph.graph import StateGraph, START, END
 #-------------------------------------
 #Routing (입력값 처리 후 컨텍스트별 작업으로 전달)
 #-------------------------------------
-from typing_extensions import Literal 
+from typing_extensions import Literal
 from langchain.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
-# LLM이 반드시 step에 "poem"/"story"/"joke" 중 하나를 내게 강제.
+# LLM이 반드시 step에 "add_ingredient"/"recommend_recipe"/"check_expiration" 중 하나를 내게 강제.
 class Route(BaseModel):
-    step: Literal["poem", "story", "joke"] = Field(
-        None, description="유저의 입력에 대해 poem/story/joke 중 하나를 선택하여라"
+    step: Literal["add_ingredient", "recommend_recipe", "check_expiration"] = Field(
+        None, description="유저의 입력에 대해 add_ingredient/recommend_recipe/check_expiration 중 하나를 선택하여라"
     )
 
 
@@ -39,24 +39,22 @@ class State(TypedDict):
 
 # Nodes
 def llm_call_1(state: State):
-    """Write a story"""
+    """Add ingredient to the fridge (Mock)"""
 
-    result = llm.invoke(state["input"])
-    return {"output": result.content}
-
+    msg = llm.invoke(f"You are a refrigerator inventory manager. Currently, the database is not connected, but pretend to add the item. Confirm to the user that the ingredient '{state['input']}' has been successfully added to their virtual refrigerator.")
+    return {"output": msg.content}
 
 def llm_call_2(state: State):
-    """Write a joke"""
+    """Recommend a recipe"""
 
-    result = llm.invoke(state["input"])
-    return {"output": result.content}
-
+    msg = llm.invoke(f"You are a creative chef. Suggest a delicious recipe using the ingredient '{state['input']}'. Include the recipe name and simple cooking steps.")
+    return {"output": msg.content}
 
 def llm_call_3(state: State):
-    """Write a poem"""
+    """Provide expiration info"""
 
-    result = llm.invoke(state["input"])
-    return {"output": result.content}
+    msg = llm.invoke(f"You are a food safety expert. Provide the typical shelf life and proper storage instructions for '{state['input']}'. Tell me exactly how many days it stays fresh.")
+    return {"output": msg.content}
 
 
 # 라우터 노드
@@ -67,7 +65,7 @@ def llm_call_router(state: State):
     decision = router.invoke(
         [
             SystemMessage(
-                content="유저의 입력에 대해 poem/story/joke 중 하나를 선택하여라"
+                content="유저의 입력에 대해 add_ingredient/recommend_recipe/check_expiration 중 하나를 선택하여라"
             ),
             HumanMessage(content=state["input"]),
         ]
@@ -79,11 +77,11 @@ def llm_call_router(state: State):
 # Conditional edge function to route to the appropriate node
 def route_decision(state: State):
     # Return the node name you want to visit next
-    if state["decision"] == "story":
+    if state["decision"] == "add_ingredient":
         return "llm_call_1"
-    elif state["decision"] == "joke":
+    elif state["decision"] == "recommend_recipe":
         return "llm_call_2"
-    elif state["decision"] == "poem":
+    elif state["decision"] == "check_expiration":
         return "llm_call_3"
 
 
@@ -119,5 +117,5 @@ print("Here is the mermaid graph syntax. You can paste it into https://mermaid.l
 print(router_workflow.get_graph(xray=True).draw_mermaid())
 
 # Invoke
-answer = router_workflow.invoke({"input": "고양이에 대해 짧은 농담을 적어줘."})
+answer = router_workflow.invoke({"input": "계란 3개 사왔어."})
 print(f"\nAnswer: {answer}")

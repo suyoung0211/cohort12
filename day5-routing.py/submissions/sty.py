@@ -6,8 +6,8 @@ load_dotenv()
 #-------------------------------------
 #모델 설정
 #-------------------------------------
-from langchain_anthropic import ChatAnthropic
-llm = ChatAnthropic(model="claude-sonnet-4-5-20250929")
+from langchain_google_genai import ChatGoogleGenerativeAI
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
 
 from typing_extensions import TypedDict
 from langgraph.graph import StateGraph, START, END
@@ -15,14 +15,14 @@ from langgraph.graph import StateGraph, START, END
 #-------------------------------------
 #Routing (입력값 처리 후 컨텍스트별 작업으로 전달)
 #-------------------------------------
-from typing_extensions import Literal 
+from typing_extensions import Literal
 from langchain.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 # LLM이 반드시 step에 "poem"/"story"/"joke" 중 하나를 내게 강제.
 class Route(BaseModel):
     step: Literal["poem", "story", "joke"] = Field(
-        None, description="유저의 입력에 대해 poem/story/joke 중 하나를 선택하여라"
+        None, description="유저의 입력에 대해 poem/stroy/joke 중 하나를 선택하여라"
     )
 
 
@@ -67,7 +67,7 @@ def llm_call_router(state: State):
     decision = router.invoke(
         [
             SystemMessage(
-                content="유저의 입력에 대해 poem/story/joke 중 하나를 선택하여라"
+                content="유저의 입력에 대해 poem/stroy/joke 중 하나를 선택하여라"
             ),
             HumanMessage(content=state["input"]),
         ]
@@ -119,5 +119,5 @@ print("Here is the mermaid graph syntax. You can paste it into https://mermaid.l
 print(router_workflow.get_graph(xray=True).draw_mermaid())
 
 # Invoke
-answer = router_workflow.invoke({"input": "고양이에 대해 짧은 농담을 적어줘."})
+answer = router_workflow.invoke({"input": "고양이에 대해 시, 이야기, 농담을 적어줘."})
 print(f"\nAnswer: {answer}")
