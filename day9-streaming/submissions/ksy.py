@@ -56,16 +56,31 @@ print("=== 실시간 리서치 프로세스 시작 ===\n")
 inputs = {"query": "2026년 AI 트렌드"}
 
 # 주로 실무에서는 'custom'과 'updates'를 섞어서 많이 씁니다.
+# stream_mode=["custom", "updates"]: 
+#   1. "custom": 노드 내부에서 writer()를 통해 보낸 실시간 진행 상황이나 중간 데이터를 수신
+#   2. "updates": 노드 실행이 완료된 후 반환(return)된 상태 업데이트 값을 수신
 for mode, chunk in app.stream(inputs, stream_mode=["custom", "updates"]):
     if mode == "custom":
+        # writer("문자열")로 보낸 내용이 chunk에 들어옵니다.
         print(f"[진행 상황] {chunk}")
     elif mode == "updates":
+        # 노드가 return한 딕셔너리(상태 변경분)가 chunk에 들어옵니다.
         for node_name, output in chunk.items():
             print(f"[{node_name}] 단계 완료: {output}")
 
 # =========================================================
 # 2. messages 스트림 + metadata 필터링 (누가 / 어디서 말했는지)
 # =========================================================
+
+"""
+[요약 설명]
+위 코드는 '메타데이터(Tag)'를 활용해 멀티 LLM 스트리밍을 제어하는 패턴입니다.
+1. 모델 초기화 시(init_chat_model) `tags=["insight"]` 등을 설정해둡니다.
+2. `stream_mode="messages"`로 실행하면, 토큰과 함께 메타데이터가 넘어옵니다.
+3. `if "insight" in metadata.get("tags", []):` 조건문으로 태그를 확인하여,
+   병렬로 실행되는 여러 모델 중 원하는 모델의 답변만 골라서 출력할 수 있습니다.
+"""
+
 import asyncio
 from typing import TypedDict
 from langgraph.graph import START, StateGraph
@@ -92,6 +107,9 @@ async def analyze_data(state: ReportState, config):
 
 async def generate_insights(state: ReportState, config):
     # 핵심 인사이트 추출 시뮬레이션
+    # insight_model은 초기화 시 tags=["insight"]가 설정되어 있습니다.
+    # 이 태그 덕분에 스트리밍 시 메타데이터 필터링(metadata.get("tags"))을 통해
+    # 특정 모델의 출력만 선별해서 사용자에게 보여줄 수 있습니다.
     res = await insight_model.ainvoke(
         [{"role": "user", "content": f"{state['topic']}의 향후 전망과 비즈니스 인사이트를 말해줘"}],
         config
@@ -133,6 +151,13 @@ asyncio.run(run_report_stream())
 # =========================================================
 # 3. LangChain을 안 쓰는 LLM이라도, 토큰 스트리밍을 custom 스트림으로 LangGraph에 끼워 넣을 수 있음
 # =========================================================
+
+"""
+[이 코드를 사용하는 이유]
+1. 최신 기능 활용: LangChain에서 아직 지원하지 않는 각 LLM 모델의 최신 API 기능을 직접 제어하고 싶을 때 사용합니다.
+2. 완전한 제어권: 토큰뿐만 아니라 중간 연산 과정, 로그, 커스텀 시각화 데이터 등 '내가 원하는 포맷'을 직접 정의해서 스트리밍 채널에 태워 보낼 수 있습니다.
+3. 유연한 통합: LangChain의 추상화 계층 없이 순수 파이썬 로직으로 처리하면서도, LangGraph의 상태 관리(State)와 제어 흐름(Graph) 안에서 조화롭게 동작하도록 설계할 수 있습니다.
+"""
 import asyncio
 import json
 import operator
@@ -302,3 +327,14 @@ for path, chunk in marketing_app.stream(
     else:
         node_name = path[-1]
     print(f"경로: {path} | 노드: {node_name} | 업데이트: {chunk}")
+
+"""
+[서브그래프(Subgraph) 요약 정리]
+1. 정의: 독립된 그래프를 다른 부모 그래프의 '하나의 노드'로 포함시킨 구조입니다.
+2. 특징:
+   - 상태 분리: 자식 그래프만의 전용 장부(State)를 사용하여 부모의 복잡도를 낮춥니다.
+   - 모듈화: 특정 기능(예: 카피 제작)을 독립된 부품처럼 만들어 여러 곳에서 재사용 가능합니다.
+   - 관찰 가능성: stream(subgraphs=True) 옵션을 통해 블랙박스 같던 내부 실행 과정을 투명하게 모니터링할 수 있습니다.
+3. 경로(Path): 튜플 형태의 path를 통해 현재 작업이 부모 노드인지 혹은 특정 세부 업무(자식) 내부인지 계층적으로 파악합니다.
+"""
+
