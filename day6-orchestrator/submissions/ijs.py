@@ -1,7 +1,5 @@
 import os
 import operator
-import time
-import random
 from typing import Annotated, List, Literal, Union
 from typing_extensions import TypedDict
 from pydantic import BaseModel, Field
@@ -13,40 +11,12 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Send
-
-# API 호출 간 딜레이 설정 (초)
-API_DELAY = 2  # 기본 딜레이
-MAX_RETRIES = 5  # 최대 재시도 횟수
-
 # gemini-2.5-flash 고정
 # 모델 설정 부분에 'max_retries' 추가
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash",
-    max_retries=MAX_RETRIES,
-    request_timeout=60,  # 타임아웃 설정
+    max_retries=5,  # 할당량 초과 시 자동으로 다시 시도하는 횟수
 )
-
-def safe_llm_call(llm_instance, messages, retries=MAX_RETRIES):
-    """API 제한을 피하기 위한 안전한 LLM 호출 함수"""
-    for attempt in range(retries):
-        try:
-            # 호출 전 딜레이 추가
-            time.sleep(API_DELAY + random.uniform(0, 1))
-            result = llm_instance.invoke(messages)
-            return result
-        except Exception as e:
-            error_msg = str(e).lower()
-            if "quota" in error_msg or "rate" in error_msg or "limit" in error_msg or "429" in error_msg:
-                # 지수 백오프: 재시도마다 대기 시간 증가
-                wait_time = (2 ** attempt) + random.uniform(0, 1)
-                print(f"  [!] API 제한 감지. {wait_time:.1f}초 후 재시도... (시도 {attempt + 1}/{retries})")
-                time.sleep(wait_time)
-            else:
-                print(f"  [!] 오류 발생: {e}")
-                if attempt == retries - 1:
-                    raise e
-                time.sleep(API_DELAY)
-    raise Exception("최대 재시도 횟수 초과")
 
 # 2. 스키마 정의
 class Section(BaseModel):
@@ -79,13 +49,11 @@ class WorkerState(TypedDict):
     worker_feedback: str
     worker_review_count: int
     worker_is_approved: bool
-    # 병렬 처리를 위해 Annotated 사용
-    completed_sections: Annotated[list, operator.add]
 
 # 4. 노드 함수 정의
 def orchestrator(state: State):
     """오케스트레이터: 토픽을 기반으로 섹션 계획"""
-    res = safe_llm_call(planner, [
+    res = planner.invoke([
         SystemMessage(content="보고서 구조 기획 전문가입니다. 주어진 주제에 대해 적절한 섹션들을 계획하세요."),
         HumanMessage(content=f"주제: {state['topic']}\n\n이 주제에 대한 보고서 섹션들을 계획해주세요.")
     ])
@@ -96,7 +64,7 @@ def llm_call(state: WorkerState):
     """작성 및 재작성"""
     f_back = f"\n이전 피드백: {state.get('worker_feedback', '')}" if state.get('worker_feedback') else ""
 
-    res = safe_llm_call(llm, [
+    res = llm.invoke([
         SystemMessage(content="보고서 작성 전문가입니다. 본문만 마크다운으로 작성하세요."),
         HumanMessage(content=f"제목: {state['section'].name}\n설명: {state['section'].description}{f_back}")
     ])
@@ -111,7 +79,7 @@ def llm_call(state: WorkerState):
 
 def reviewer(state: WorkerState):
     """품질 검수"""
-    res = safe_llm_call(reviewer_llm, [
+    res = reviewer_llm.invoke([
         SystemMessage(content="품질 검수자입니다. 부실하면 반려하세요."),
         HumanMessage(content=f"섹션: {state['section'].name}\n내용: {state['worker_content']}")
     ])
@@ -129,6 +97,14 @@ def synthesizer(state: State):
     return {"final_report": final_report}
 
 # 5. 제어 로직 수정
+def assign_workers(state: State):
+    return [Send("llm_call", {
+        "section": s,
+        "worker_review_count": 0,
+        "worker_content": "",
+        "worker_feedback": ""
+    }) for s in state["sections"]]
+
 def check_review(state: WorkerState) -> Literal["llm_call", "synthesizer_bridge"]:
     if state.get("worker_is_approved") or state.get("worker_review_count", 0) >= 2:
         return "synthesizer_bridge"
@@ -136,46 +112,23 @@ def check_review(state: WorkerState) -> Literal["llm_call", "synthesizer_bridge"
     print(f"  [X] {state['section'].name}: 반려됨 -> 재작성 시작")
     return "llm_call"
 
-# 6. 워커 서브그래프 생성
-worker_builder = StateGraph(WorkerState)
-worker_builder.add_node("llm_call", llm_call)
-worker_builder.add_node("reviewer", reviewer)
-worker_builder.add_node("synthesizer_bridge", synthesizer_bridge)
-
-worker_builder.add_edge(START, "llm_call")
-worker_builder.add_edge("llm_call", "reviewer")
-worker_builder.add_conditional_edges("reviewer", check_review, ["llm_call", "synthesizer_bridge"])
-worker_builder.add_edge("synthesizer_bridge", END)
-
-worker_graph = worker_builder.compile()
-
-def worker_node(state: WorkerState):
-    """워커 서브그래프를 실행하는 노드"""
-    result = worker_graph.invoke(state)
-    # completed_sections가 Annotated[list, operator.add]이므로 그대로 반환
-    return result
-
-def assign_workers(state: State):
-    return [Send("worker", {
-        "section": s,
-        "worker_review_count": 0,
-        "worker_content": "",
-        "worker_feedback": "",
-        "worker_is_approved": False,
-        "completed_sections": []
-    }) for s in state["sections"]]
-
-# 7. 메인 그래프 빌드 및 컴파일
+# 6. 빌드 및 컴파일
 builder = StateGraph(State)
 
 builder.add_node("orchestrator", orchestrator)
-builder.add_node("worker", worker_node)
+builder.add_node("llm_call", llm_call)
+builder.add_node("reviewer", reviewer)
+builder.add_node("synthesizer_bridge", synthesizer_bridge)
 builder.add_node("synthesizer", synthesizer)
 
 builder.add_edge(START, "orchestrator")
-builder.add_conditional_edges("orchestrator", assign_workers, ["worker"])
+builder.add_conditional_edges("orchestrator", assign_workers, ["llm_call"])
 
-builder.add_edge("worker", "synthesizer")
+# 워커 루프: 작성 -> 검수 -> (재작성 OR 브릿지)
+builder.add_edge("llm_call", "reviewer")
+builder.add_conditional_edges("reviewer", check_review, ["llm_call", "synthesizer_bridge"])
+
+builder.add_edge("synthesizer_bridge", "synthesizer")
 builder.add_edge("synthesizer", END)
 
 app = builder.compile()
